@@ -1,0 +1,25 @@
+# Ignore TXT input or HTML output files
+*.html
+*.txt
+
+# EXCEPT the examples to be included with the git repo
+!example1.txt
+!example2.txt
+
+# Ignore other crap that shouldn't exist unless someone forks this and expands on it...
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments & Virtual Machines
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Operating System metadata
+.DS_Store
+Thumbs.db
