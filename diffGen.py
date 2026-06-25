@@ -53,18 +53,42 @@ def generate_merge_html(file1_path, file2_path, output_path):
                 })
         elif tag == 'replace':
             idx1, idx2 = i1, j1
+            # Look-ahead pairing engine to map shifted modifications amidst large insertions/deletions
             while idx1 < i2 or idx2 < j2:
                 if idx1 < i2 and idx2 < j2:
-                    sim = difflib.SequenceMatcher(None, file1_lines[idx1], file2_lines[idx2]).ratio()
-                    if sim >= 0.4:
+                    found_match_idx2 = None
+                    best_sim = 0.4  # Alignment threshold
+                    
+                    for look_idx2 in range(idx2, j2):
+                        sim = difflib.SequenceMatcher(None, file1_lines[idx1], file2_lines[look_idx2]).ratio()
+                        if sim >= best_sim:
+                            best_sim = sim
+                            found_match_idx2 = look_idx2
+                            if sim > 0.7:  # Strong anchor found, lock alignment target
+                                break
+                    
+                    if found_match_idx2 is not None:
+                        # Flush out intervening lines from modified file as clean additions
+                        for k in range(idx2, found_match_idx2):
+                            aligned_rows.append({
+                                "type": "added", "sym": "+",
+                                "f1_raw": None, "ln1": "",
+                                "f2_raw": file2_lines[k], "ln2": k + 1
+                            })
+                        
+                        sim_match = difflib.SequenceMatcher(None, file1_lines[idx1], file2_lines[found_match_idx2]).ratio()
+                        row_type = "equal" if sim_match == 1.0 else "changed"
+                        row_sym = "=" if sim_match == 1.0 else "~"
+                        
                         aligned_rows.append({
-                            "type": "changed", "sym": "~",
+                            "type": row_type, "sym": row_sym,
                             "f1_raw": file1_lines[idx1], "ln1": idx1 + 1,
-                            "f2_raw": file2_lines[idx2], "ln2": idx2 + 1
+                            "f2_raw": file2_lines[found_match_idx2], "ln2": found_match_idx2 + 1
                         })
+                        idx2 = found_match_idx2 + 1
                         idx1 += 1
-                        idx2 += 1
                     else:
+                        # No candidate lines ahead match, process original line as a direct removal
                         aligned_rows.append({
                             "type": "removed", "sym": "-",
                             "f1_raw": file1_lines[idx1], "ln1": idx1 + 1,
@@ -174,7 +198,8 @@ def generate_merge_html(file1_path, file2_path, output_path):
             display: flex;
             gap: 10px;
             flex-grow: 1;
-            overflow: hidden;
+            overflow-y: auto; /* Master common vertical scrollbar */
+            padding-bottom: 20px;
         }}
         .column {{
             flex: 1;
@@ -183,7 +208,6 @@ def generate_merge_html(file1_path, file2_path, output_path):
             border-radius: 6px;
             display: flex;
             flex-direction: column;
-            overflow: hidden;
         }}
         .column-header {{
             background: #f1f2f4;
@@ -192,10 +216,11 @@ def generate_merge_html(file1_path, file2_path, output_path):
             border-bottom: 1px solid #d1d5da;
             text-align: center;
             user-select: none;
+            position: sticky; /* Keep panels aligned cleanly while scrolling */
+            top: 0;
+            z-index: 10;
         }}
         .table-container {{
-            flex-grow: 1;
-            overflow-y: auto;
             font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
             font-size: 12px;
         }}
@@ -252,7 +277,6 @@ def generate_merge_html(file1_path, file2_path, output_path):
         .changed {{ background-color: #fff8e1; color: #b07d00; }}
         .empty-line {{ background-color: #fafbfc; color: #959da5; }}
 
-        /* Highlight classes for targeted user choices */
         .merged-accepted {{
             background-color: #dbedff;
             color: #0366d6;
@@ -359,7 +383,6 @@ def generate_merge_html(file1_path, file2_path, output_path):
 
             const totalRows = rawDiffData.length;
             
-            // Map real dynamic active line numbers for output document track
             let centerLineNumbers = new Array(totalRows).fill("");
             let currentLineCount = 1;
             for (let i = 0; i < totalRows; i++) {{
@@ -389,6 +412,8 @@ def generate_merge_html(file1_path, file2_path, output_path):
                 }}
                 currentBlock.length++;
             }}
+
+            let blockCount = 0;
 
             blocks.forEach(block => {{
                 if (block.type === 'visible') {{
@@ -423,7 +448,7 @@ def generate_merge_html(file1_path, file2_path, output_path):
                         }}
                         leftTable.appendChild(trL);
 
-                        // Center Column (With line track, highlights, and Undo engine)
+                        // Center Column
                         const trC = document.createElement('tr');
                         const state = mergedState[i];
                         
@@ -509,8 +534,21 @@ def generate_merge_html(file1_path, file2_path, output_path):
                     rightContainer.appendChild(rightTable);
 
                 }} else {{
+                    blockCount++;
+                    const currentBlockIdx = blockCount;
+
                     const createAccordion = (text, targetContainer, tableContentGenerator) => {{
                         const details = document.createElement('details');
+                        details.setAttribute('data-block-idx', currentBlockIdx);
+                        
+                        // Cross-column mirror toggle tracking engine
+                        details.addEventListener('toggle', (e) => {{
+                            const isOpen = details.open;
+                            document.querySelectorAll(`details[data-block-idx="${{currentBlockIdx}}"]`).forEach(d => {{
+                                if (d.open !== isOpen) d.open = isOpen;
+                            }});
+                        }});
+
                         const summary = document.createElement('summary');
                         summary.textContent = text;
                         details.appendChild(summary);
@@ -539,11 +577,9 @@ def generate_merge_html(file1_path, file2_path, output_path):
                         const t = document.createElement('table');
                         for(let i=block.startIndex; i<block.startIndex+block.length; i++) {{
                             const tr = document.createElement('tr'); tr.className='equal';
-                            
                             const tdLn = document.createElement('td'); tdLn.className = 'ln-cell'; tdLn.textContent = centerLineNumbers[i]; tr.appendChild(tdLn);
                             const tdAct = document.createElement('td'); tdAct.className = 'action-cell'; tr.appendChild(tdAct);
                             const tdTxt = document.createElement('td'); tdTxt.textContent = mergedState[i].text; tr.appendChild(tdTxt);
-                            
                             t.appendChild(tr);
                         }}
                         return t;
